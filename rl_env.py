@@ -75,6 +75,11 @@ class HighwayObstacleEnv(gym.Env):
         super().reset(seed=seed)
 
         self.state = self.model.x0.copy()
+
+     # small initial perturbations
+        self.state[1] += np.random.uniform(-0.2, 0.2)   # y
+        self.state[2] += np.random.uniform(-0.02, 0.02) # psi
+
         self.prev_u = self.model.u0.copy()
         self.step_count = 0
 
