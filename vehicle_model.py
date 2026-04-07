@@ -44,7 +44,7 @@ class VehicleModel:
         self.delta_max = np.pi / 2.0
 
         # Initial condition from the sheet
-        self.x0 = np.array([0.0, 2.5, 0.0, 120.0 / 3.6], dtype=float)
+        self.x0 = np.array([0.0, 3.5, 0.0, 120.0 / 3.6], dtype=float)
         self.u0 = np.array([0.0, 0.0], dtype=float)
 
     @staticmethod
@@ -109,27 +109,18 @@ class VehicleModel:
 
     def create_collocation_integrator(self) -> ca.Function:
         """
-        Orthogonal collocation on finite elements over one sample time dt.
+        Manual RK4 integrator over one sample time dt (avoids CasADi plugin DLLs).
+        Returns F(x0, p) -> xf  with the same interface as ca.integrator.
         """
         x = ca.MX.sym("x", 4)
         u = ca.MX.sym("u", 2)
+        f = self.continuous_dynamics_symbolic
 
-        dae = {
-            "x": x,
-            "p": u,
-            "ode": self.continuous_dynamics_symbolic(x, u),
-        }
+        dt = self.dt
+        k1 = f(x, u)
+        k2 = f(x + (dt / 2) * k1, u)
+        k3 = f(x + (dt / 2) * k2, u)
+        k4 = f(x + dt * k3, u)
+        xf = x + (dt / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
 
-        # CasADi collocation integrator over one control interval
-        F = ca.integrator(
-            "F",
-            "collocation",
-            dae,
-            {
-                "tf": self.dt,
-                "number_of_finite_elements": 1,
-                "interpolation_order": 3,
-                "rootfinder": "newton",
-            },
-        )
-        return F
+        return ca.Function("F", [x, u], [xf], ["x0", "p"], ["xf"])
