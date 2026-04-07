@@ -38,7 +38,7 @@ class HighwayObstacleEnv(gym.Env):
         self.prev_u = None
 
         # Practical steering limit for RL training
-        self.rl_delta_limit = 0.3  # rad
+        self.rl_delta_limit = 0.2 # rad
 
         # Normalized action space
         self.action_space = spaces.Box(
@@ -47,27 +47,11 @@ class HighwayObstacleEnv(gym.Env):
             dtype=np.float32
         )
 
-        # Observation:
-        # [lane_error, psi, v, dx_obs, dy_obs]
-        obs_low = np.array([
-            -10.0,                  # lane error
-            self.model.psi_min,     # psi
-            self.model.v_min,       # v
-            -1e3,                   # dx_obs
-            -1e3                    # dy_obs
-        ], dtype=np.float32)
-
-        obs_high = np.array([
-            10.0,                   # lane error
-            self.model.psi_max,     # psi
-            self.model.v_max,       # v
-            1e3,                    # dx_obs
-            1e3                     # dy_obs
-        ], dtype=np.float32)
-
+        # Observation (normalized): 7 elements
+        # [lane_error_norm, psi_norm, v_norm, dx_obs_norm, dy_obs_norm, x_progress_norm, dist_obs_norm]
         self.observation_space = spaces.Box(
-            low=obs_low,
-            high=obs_high,
+            low=np.full(7, -5.0, dtype=np.float32),
+            high=np.full(7, 5.0, dtype=np.float32),
             dtype=np.float32
         )
 
@@ -143,16 +127,19 @@ class HighwayObstacleEnv(gym.Env):
 
         dx_obs = self.model.obs_x - x_pos
         dy_obs = self.model.obs_y - y_pos
+        dist_obs = np.sqrt(dx_obs**2 + dy_obs**2)
 
         y_ref = 2.0
-        lane_error = y_pos - y_ref
+        lane_width = self.model.lane_width  # 4.0 m
 
         obs = np.array([
-            lane_error,
-            psi,
-            v,
-            dx_obs,
-            dy_obs
+            (y_pos - y_ref) / lane_width,           # lane error, normalized
+            psi / (np.pi / 2),                      # heading, normalized
+            v / self.model.v_max,                   # speed, normalized
+            dx_obs / self.model.obs_x,              # longitudinal dist to obs, normalized
+            dy_obs / lane_width,                    # lateral dist to obs, normalized
+            x_pos / self.model.obs_x,              # forward progress [0, 1+]
+            dist_obs / self.model.obs_x,            # scalar dist to obstacle, normalized
         ], dtype=np.float32)
 
         return obs
@@ -196,7 +183,6 @@ class HighwayObstacleEnv(gym.Env):
         safe_radius = self.model.obs_r + self.model.obs_margin
 
         return dist <= safe_radius
-
     def _compute_reward(
         self,
         state,
@@ -208,45 +194,56 @@ class HighwayObstacleEnv(gym.Env):
         state_violation,
         reached_goal
     ):
-        x, y, psi, v = next_state
+        x_prev, _, _, _ = state
+        x, y, psi, _ = next_state
         a, delta_f = action
 
         y_ref = 2.0
+        lane_width = self.model.lane_width  # 4.0 m
+
+        dx = x - self.model.obs_x
+        dy = y - self.model.obs_y
+        dist = np.sqrt(dx**2 + dy**2)
+
         reward = 0.0
 
-        # 1. Forward progress
-        reward += 2.0 * (next_state[0] - state[0])
+        # 1. Forward progress reward (normalized, ~[0, 1] per step)
+        dx_progress = x - x_prev
+        reward += dx_progress / (self.model.v_max * self.model.dt)
 
-        # 2. Stay near right-lane center
-        reward -= 1.5 * (y - y_ref) ** 2
+        # 2. Lane-centering penalty (normalized by lane width, near-zero when centered)
+        lane_error_norm = (y - y_ref) / lane_width
+        # Reduce lane penalty near obstacle so agent can swerve
+        near_obs = dist < 15.0
+        lane_weight = 0.05 if near_obs else 0.5
+        reward -= lane_weight * lane_error_norm**2
 
-        # 3. Heading regularization
-        reward -= 0.2 * psi ** 2
+        # 3. Heading penalty (discourage large yaw)
+        reward -= 0.1 * (psi / (np.pi / 2))**2
 
-        # 4. Control effort penalty
-        reward -= 0.01 * a ** 2
-        reward -= 0.01 * delta_f ** 2
+        # 4. Action smoothness — penalize magnitude and rate of change for both inputs
+        a_range = self.model.a_max - self.model.a_min   # 13.0 m/s²
+        reward -= 0.1 * (a / a_range)**2
+        reward -= 0.3 * ((a - prev_u[0]) / a_range)**2
+        reward -= 0.1 * (delta_f / self.rl_delta_limit)**2
+        reward -= 0.3 * ((delta_f - prev_u[1]) / self.rl_delta_limit)**2
 
-        # 5. Smoothness penalty
-        reward -= 0.05 * (action[0] - prev_u[0]) ** 2
-        reward -= 0.05 * (action[1] - prev_u[1]) ** 2
+        # 5. Obstacle proximity: exponential penalty, active within 30m
+        if dist < 30.0:
+            sigma = 8.0
+            reward -= 3.0 * np.exp(-dist / sigma)
 
-        # 6. Soft obstacle proximity penalty
-        dist_obs = np.sqrt((x - self.model.obs_x) ** 2 + (y - self.model.obs_y) ** 2)
-        if dist_obs < 8.0:
-            reward -= 2.0 * (8.0 - dist_obs)
-
-        # 7. Terminal penalties / bonus
+        # 6. Terminal penalties / bonus (dominant signals)
         if collision:
-            reward -= 300.0
+            reward -= 100.0
 
         if out_of_highway:
-            reward -= 300.0
+            reward -= 100.0
 
         if state_violation:
-            reward -= 200.0
+            reward -= 50.0
 
         if reached_goal:
-            reward += 100.0
+            reward += 200.0
 
         return float(reward)

@@ -10,24 +10,50 @@ def plot_trajectory(states, model, save_path=None, show=True):
 
     fig, ax = plt.subplots(figsize=(11, 5))
 
-    # Trajectory
+    # ===== Trajectory =====
     ax.plot(x, y, linewidth=2, label="Vehicle trajectory")
 
-    # Highway boundaries for 2 lanes
+    # ===== Highway =====
     ax.axhline(y=0.0, linestyle="--", label="Road boundary")
     ax.axhline(y=model.lane_width, linestyle=":", label="Lane separator")
     ax.axhline(y=2.0, linestyle=":", label="Right lane center")
     ax.axhline(y=model.road_y_max, linestyle="--")
 
-    # Start and end markers
+    # ===== Obstacle =====
+    # actual obstacle
+    obstacle = plt.Circle(
+        (model.obs_x, model.obs_y),
+        model.obs_r,
+        color="black",
+        fill=False,
+        linewidth=2,
+        label="Obstacle"
+    )
+
+    # safety margin
+    safety = plt.Circle(
+        (model.obs_x, model.obs_y),
+        model.obs_r + model.obs_margin,
+        color="black",
+        linestyle="--",
+        fill=False,
+        label="Obstacle + safety"
+    )
+
+    ax.add_patch(obstacle)
+    ax.add_patch(safety)
+
+    # ===== Start / End =====
     ax.scatter(states[0, 0], states[0, 1], marker="o", s=60, label="Start")
     ax.scatter(states[-1, 0], states[-1, 1], marker="x", s=60, label="End")
 
+    # ===== Labels =====
     ax.set_xlabel("X [m]")
     ax.set_ylabel("Y [m]")
     ax.set_title("Vehicle trajectory")
     ax.grid(True)
     ax.set_ylim(0, 8)
+    ax.axis("equal")  # important for correct circle shape
     ax.legend()
 
     if save_path is not None:
@@ -37,7 +63,6 @@ def plot_trajectory(states, model, save_path=None, show=True):
         plt.show()
     else:
         plt.close(fig)
-
 
 def plot_states_and_inputs(states, inputs, dt, save_path=None, show=True):
     states = np.asarray(states, dtype=float)
