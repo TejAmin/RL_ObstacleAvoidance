@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "rl-obstacle-avoidance"
+version = "0.1.0"
+description = "SAC-based RL agent for highway obstacle avoidance using a kinematic bicycle model"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Tej Deepak Amin" }
+]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "gymnasium",
+    "stable-baselines3[extra]",
+    "casadi",
+    "tensorboard",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
