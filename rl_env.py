@@ -36,9 +36,16 @@ class HighwayObstacleEnv(gym.Env):
 
         self.state = None
         self.prev_u = None
+        self.ema_u = None
 
         # Practical steering limit for RL training
-        self.rl_delta_limit = 0.2 # rad
+        self.rl_delta_limit = 0.2  # rad
+
+        # EMA smoothing factor for actions (0 = no change, 1 = no smoothing)
+        self.ema_alpha = 0.7
+
+        # Temporal difference penalty weight for steering angle changes
+        self.lambda_td = 0.6
 
         # Normalized action space
         self.action_space = spaces.Box(
@@ -65,6 +72,7 @@ class HighwayObstacleEnv(gym.Env):
         self.state[2] += np.random.uniform(-0.02, 0.02) # psi
 
         self.prev_u = self.model.u0.copy()
+        self.ema_u = self.model.u0.copy()
         self.step_count = 0
 
         obs = self._get_obs(self.state)
@@ -75,8 +83,11 @@ class HighwayObstacleEnv(gym.Env):
     def step(self, action):
         self.step_count += 1
 
-        # Convert normalized RL action to physical input
-        u = self._scale_action(action)
+        # Convert normalized RL action to physical input, then EMA-smooth it
+        u_raw = self._scale_action(action)
+        u = self.ema_alpha * u_raw + (1.0 - self.ema_alpha) * self.ema_u
+        u = self.model.clip_input(u)
+        self.ema_u = u.copy()
 
         # Simulate one step using the same collocation-based model
         res = self.integrator(x0=self.state, p=u)
@@ -226,7 +237,9 @@ class HighwayObstacleEnv(gym.Env):
         reward -= 0.1 * (a / a_range)**2
         reward -= 0.3 * ((a - prev_u[0]) / a_range)**2
         reward -= 0.1 * (delta_f / self.rl_delta_limit)**2
-        reward -= 0.3 * ((delta_f - prev_u[1]) / self.rl_delta_limit)**2
+
+        # Temporal difference penalty on steering: λ * (δ_f[t] - δ_f[t-1])²
+        reward -= self.lambda_td * ((delta_f - prev_u[1]) / self.rl_delta_limit)**2
 
         # 5. Obstacle proximity: exponential penalty, active within 30m
         if dist < 30.0:
