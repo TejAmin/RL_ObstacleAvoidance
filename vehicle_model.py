@@ -44,7 +44,7 @@ class VehicleModel:
         self.delta_max = np.pi / 2.0
 
         # Initial condition from the sheet
-        self.x0 = np.array([0.0, 3.5, 0.0, 120.0 / 3.6], dtype=float)
+        self.x0 = np.array([0.0, 2.5, 0.0, 120.0 / 3.6], dtype=float)
         self.u0 = np.array([0.0, 0.0], dtype=float)
 
     @staticmethod

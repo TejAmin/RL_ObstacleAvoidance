@@ -4,17 +4,17 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback
 
-from rl_env import HighwayObstacleEnv
+from rl_env import HighwayObstacleEnv, ActionSmoothingWrapper
 
 
 def main():
     os.makedirs("models", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
 
-    env = HighwayObstacleEnv(max_steps=120)
+    env = ActionSmoothingWrapper(HighwayObstacleEnv(max_steps=200), alpha=0.7)
     env = Monitor(env)
 
-    eval_env = Monitor(HighwayObstacleEnv(max_steps=120))
+    eval_env = Monitor(ActionSmoothingWrapper(HighwayObstacleEnv(max_steps=200), alpha=0.7))
 
     # Save best model automatically during training
     eval_callback = EvalCallback(
@@ -51,7 +51,7 @@ def main():
     )
 
     model.learn(
-        total_timesteps=300000,
+        total_timesteps=150000,
         callback=[eval_callback, checkpoint_callback],
     )
 

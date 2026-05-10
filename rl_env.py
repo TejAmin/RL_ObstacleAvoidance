@@ -36,16 +36,9 @@ class HighwayObstacleEnv(gym.Env):
 
         self.state = None
         self.prev_u = None
-        self.ema_u = None
 
         # Practical steering limit for RL training
-        self.rl_delta_limit = 0.2  # rad
-
-        # EMA smoothing factor for actions (0 = no change, 1 = no smoothing)
-        self.ema_alpha = 0.7
-
-        # Temporal difference penalty weight for steering angle changes
-        self.lambda_td = 0.6
+        self.rl_delta_limit = 0.35  # rad
 
         # Normalized action space
         self.action_space = spaces.Box(
@@ -72,7 +65,6 @@ class HighwayObstacleEnv(gym.Env):
         self.state[2] += np.random.uniform(-0.02, 0.02) # psi
 
         self.prev_u = self.model.u0.copy()
-        self.ema_u = self.model.u0.copy()
         self.step_count = 0
 
         obs = self._get_obs(self.state)
@@ -83,11 +75,8 @@ class HighwayObstacleEnv(gym.Env):
     def step(self, action):
         self.step_count += 1
 
-        # Convert normalized RL action to physical input, then EMA-smooth it
-        u_raw = self._scale_action(action)
-        u = self.ema_alpha * u_raw + (1.0 - self.ema_alpha) * self.ema_u
-        u = self.model.clip_input(u)
-        self.ema_u = u.copy()
+        # Convert normalized RL action to physical input
+        u = self._scale_action(action)
 
         # Simulate one step using the same collocation-based model
         res = self.integrator(x0=self.state, p=u)
@@ -101,7 +90,7 @@ class HighwayObstacleEnv(gym.Env):
         collision = self._check_collision(next_state)
         out_of_highway = self._check_out_of_highway(next_state)
         state_violation = self._check_state_violation(next_state)
-        reached_goal = next_state[0] >= 110.0
+        reached_goal = next_state[0] >= 170.0
         timeout = self.step_count >= self.max_steps
 
         terminated = collision or out_of_highway or state_violation or reached_goal
@@ -206,57 +195,100 @@ class HighwayObstacleEnv(gym.Env):
         reached_goal
     ):
         x_prev, _, _, _ = state
-        x, y, psi, _ = next_state
+        x, y, psi, v = next_state
         a, delta_f = action
+        prev_a, prev_delta = prev_u
 
-        y_ref = 2.0
-        lane_width = self.model.lane_width  # 4.0 m
+        y_ref   = 2.0
+        a_range = self.model.a_max - self.model.a_min  # 13.0 m/s²
 
-        dx = x - self.model.obs_x
-        dy = y - self.model.obs_y
-        dist = np.sqrt(dx**2 + dy**2)
+        # --- Obstacle geometry ---
+        obs_r_eff = self.model.obs_r + self.model.obs_margin          # 2.2 m
+        dx_obs  = x - self.model.obs_x
+        dy_obs  = y - self.model.obs_y
+        dist_sq = dx_obs ** 2 + dy_obs ** 2
 
-        reward = 0.0
+        # --- MPC Term 1: Velocity maximization  (MPC: minimize -0.5*v) ---
+        v_error = (v - self.model.v_max) ** 2   # 7.84 at v=33.3 → strong bang-coast
 
-        # 1. Forward progress reward (normalized, ~[0, 1] per step)
-        dx_progress = x - x_prev
-        reward += dx_progress / (self.model.v_max * self.model.dt)
+        # --- MPC Term 2: Lateral tracking y=2  (MPC: w_y*(y-2)², weight_factor near obs) ---
+        lat_error  = (y - y_ref) ** 2
+        # Reduce lateral pull when close to obstacle so agent swerves freely (MPC: 0.1×)
+        lat_weight = 0.05 if dist_sq < (obs_r_eff + 5.0) ** 2 else 1.0
 
-        # 2. Lane-centering penalty (normalized by lane width, near-zero when centered)
-        lane_error_norm = (y - y_ref) / lane_width
-        # Reduce lane penalty near obstacle so agent can swerve
-        near_obs = dist < 15.0
-        lane_weight = 0.05 if near_obs else 0.5
-        reward -= lane_weight * lane_error_norm**2
+        # --- MPC Term 3: Heading alignment ---
+        heading_error = psi ** 2
 
-        # 3. Heading penalty (discourage large yaw)
-        reward -= 0.1 * (psi / (np.pi / 2))**2
+        # --- MPC Term 4: Steering effort  (MPC: w_delta*delta_f²) ---
+        steer_effort = delta_f ** 2
 
-        # 4. Action smoothness — penalize magnitude and rate of change for both inputs
-        a_range = self.model.a_max - self.model.a_min   # 13.0 m/s²
-        reward -= 0.1 * (a / a_range)**2
-        reward -= 0.3 * ((a - prev_u[0]) / a_range)**2
-        reward -= 0.1 * (delta_f / self.rl_delta_limit)**2
+        # --- MPC Term 5: Obstacle 1/dist²  (MPC: w_obs/dist_sq = 1000/dist²) ---
+        dist_sq_safe   = max(float(dist_sq), obs_r_eff ** 2)
+        obstacle_cost  = 100.0 / dist_sq_safe  # ~5.7 at 10 m, ~22 at 5 m, ~100 at 2.2 m (edge)
 
-        # Temporal difference penalty on steering: λ * (δ_f[t] - δ_f[t-1])²
-        reward -= self.lambda_td * ((delta_f - prev_u[1]) / self.rl_delta_limit)**2
+        # --- MPC Term 6: Acceleration rate  (MPC: w_acc_rate*(Δa)²) ---
+        accel_rate  = ((a - prev_a) / a_range) ** 2
 
-        # 5. Obstacle proximity: exponential penalty, active within 30m
-        if dist < 30.0:
-            sigma = 8.0
-            reward -= 3.0 * np.exp(-dist / sigma)
+        # --- MPC Term 7: Steering rate  (MPC: w_steer_rate*(Δdelta)²) ---
+        steer_rate  = ((delta_f - prev_delta) / self.rl_delta_limit) ** 2
 
-        # 6. Terminal penalties / bonus (dominant signals)
+        # --- RL-specific: Forward progress (MPC has finite horizon; RL needs explicit signal) ---
+        progress = (x - x_prev) / (self.model.v_max * self.model.dt)
+
+        # --- RL-specific: Lateral velocity — damps overshoot/undershoot ---
+        y_dot       = (y - state[1]) / self.model.dt
+        lat_vel     = (y_dot / self.model.v_max) ** 2
+
+        # Settling bonus: explicit positive reward for stable cruising at lane center
+        settling = 5.0 if (
+            abs(y - y_ref) < 0.2 and
+            abs(psi) < 0.05 and
+            abs(delta_f) < 0.05
+        ) else 0.0
+
+        reward = (
+            + 1.0 * progress
+            - 1.0 * v_error            # MPC: -0.5*v  → bang-coast to v_max
+            - lat_weight * lat_error   # MPC: 20*(y-2)², reduced near obstacle
+            - 0.5 * heading_error      # MPC: implicit via dynamics
+            - 0.1 * steer_effort       # MPC: w_delta=20 * delta_f²
+            - 0.3 * accel_rate         # MPC: w_acc_rate=100 * (Δa)²
+            - 1.0 * steer_rate         # MPC: w_steer_rate=50 * (Δdelta)²
+            - obstacle_cost            # MPC: w_obs=1000 / dist²
+            - 0.5 * lat_vel            # RL: dampen lateral oscillations
+            + settling                 # bonus for stable cruising at lane center
+        )
+
+        # Terminal signals (dominant — RL-specific)
         if collision:
             reward -= 100.0
-
         if out_of_highway:
             reward -= 100.0
-
         if state_violation:
             reward -= 50.0
-
         if reached_goal:
             reward += 200.0
 
         return float(reward)
+
+
+class ActionSmoothingWrapper(gym.Wrapper):
+    """EMA-smooths normalized actions before passing to the base env."""
+
+    def __init__(self, env, alpha: float = 0.7):
+        super().__init__(env)
+        self.alpha = alpha
+        self._prev_action = np.zeros(env.action_space.shape, dtype=np.float32)
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        # Initialize at max accel so first smoothed action hits ~3.0 m/s² immediately
+        self._prev_action = np.array([1.0, 0.0], dtype=np.float32)
+        return obs, info
+
+    def step(self, action):
+        action = np.asarray(action, dtype=np.float32)
+        smoothed = self.alpha * action + (1.0 - self.alpha) * self._prev_action
+        smoothed = np.clip(smoothed, self.action_space.low, self.action_space.high)
+        self._prev_action = smoothed.copy()
+        return self.env.step(smoothed)

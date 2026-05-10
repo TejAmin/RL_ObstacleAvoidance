@@ -52,8 +52,7 @@ def plot_trajectory(states, model, save_path=None, show=True):
     ax.set_ylabel("Y [m]")
     ax.set_title("Vehicle trajectory")
     ax.grid(True)
-    ax.set_ylim(0, 8)
-    ax.axis("equal")  # important for correct circle shape
+    ax.set_ylim(0, 10)
     ax.legend()
 
     if save_path is not None:
