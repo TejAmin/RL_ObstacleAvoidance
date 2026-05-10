@@ -208,34 +208,34 @@ class HighwayObstacleEnv(gym.Env):
         dy_obs  = y - self.model.obs_y
         dist_sq = dx_obs ** 2 + dy_obs ** 2
 
-        # --- MPC Term 1: Velocity maximization  (MPC: minimize -0.5*v) ---
+        #  Velocity maximization  (MPC: minimize -0.5*v) ---
         v_error = (v - self.model.v_max) ** 2   # 7.84 at v=33.3 → strong bang-coast
 
-        # --- MPC Term 2: Lateral tracking y=2  (MPC: w_y*(y-2)², weight_factor near obs) ---
+        # Lateral tracking y=2  (MPC: w_y*(y-2)², weight_factor near obs) ---
         lat_error  = (y - y_ref) ** 2
         # Reduce lateral pull when close to obstacle so agent swerves freely (MPC: 0.1×)
         lat_weight = 0.05 if dist_sq < (obs_r_eff + 5.0) ** 2 else 1.0
 
-        # --- MPC Term 3: Heading alignment ---
+        #  Heading alignment ---
         heading_error = psi ** 2
 
-        # --- MPC Term 4: Steering effort  (MPC: w_delta*delta_f²) ---
+        #  Steering effort   ---
         steer_effort = delta_f ** 2
 
-        # --- MPC Term 5: Obstacle 1/dist²  (MPC: w_obs/dist_sq = 1000/dist²) ---
+        #  Obstacle 1/dist²   ---
         dist_sq_safe   = max(float(dist_sq), obs_r_eff ** 2)
         obstacle_cost  = 100.0 / dist_sq_safe  # ~5.7 at 10 m, ~22 at 5 m, ~100 at 2.2 m (edge)
 
-        # --- MPC Term 6: Acceleration rate  (MPC: w_acc_rate*(Δa)²) ---
+        #  Acceleration rate ---
         accel_rate  = ((a - prev_a) / a_range) ** 2
 
-        # --- MPC Term 7: Steering rate  (MPC: w_steer_rate*(Δdelta)²) ---
+        #  Steering rate   ---
         steer_rate  = ((delta_f - prev_delta) / self.rl_delta_limit) ** 2
 
-        # --- RL-specific: Forward progress (MPC has finite horizon; RL needs explicit signal) ---
+        #  Forward progress  ---
         progress = (x - x_prev) / (self.model.v_max * self.model.dt)
 
-        # --- RL-specific: Lateral velocity — damps overshoot/undershoot ---
+        #  Lateral velocity — damps overshoot/undershoot ---
         y_dot       = (y - state[1]) / self.model.dt
         lat_vel     = (y_dot / self.model.v_max) ** 2
 
@@ -248,15 +248,15 @@ class HighwayObstacleEnv(gym.Env):
 
         reward = (
             + 1.0 * progress
-            - 1.0 * v_error            # MPC: -0.5*v  → bang-coast to v_max
-            - lat_weight * lat_error   # MPC: 20*(y-2)², reduced near obstacle
-            - 0.5 * heading_error      # MPC: implicit via dynamics
-            - 0.1 * steer_effort       # MPC: w_delta=20 * delta_f²
-            - 0.3 * accel_rate         # MPC: w_acc_rate=100 * (Δa)²
-            - 1.0 * steer_rate         # MPC: w_steer_rate=50 * (Δdelta)²
-            - obstacle_cost            # MPC: w_obs=1000 / dist²
-            - 0.5 * lat_vel            # RL: dampen lateral oscillations
-            + settling                 # bonus for stable cruising at lane center
+            - 1.0 * v_error            
+            - lat_weight * lat_error   
+            - 0.5 * heading_error      
+            - 0.1 * steer_effort      
+            - 0.3 * accel_rate         
+            - 1.0 * steer_rate        
+            - obstacle_cost            
+            - 0.5 * lat_vel            
+            + settling                
         )
 
         # Terminal signals (dominant — RL-specific)
