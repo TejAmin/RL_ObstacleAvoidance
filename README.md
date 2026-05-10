@@ -68,22 +68,22 @@ Continuous, normalized to `[-1, 1]^2`. An `ActionSmoothingWrapper` applies EMA s
 
 The reward mirrors the NMPC cost function (MPC weights: `w_y=20`, `w_delta=20`, `w_obs=1000`, `w_acc_rate=100`, `w_steer_rate=50`):
 
-| Component | Formula | Notes |
-| --------- | ------- | ----- |
-| Forward progress | `+1.0 * dx / (v_max * dt)` | ~1.0/step at v_max |
-| Velocity tracking | `-1.0 * (v - v_max)^2` | Bang-coast to v_max |
-| Lane centering | `-lat_weight * (y - 2)^2` | MPC: `w_y*(y-2)^2` |
-| Heading alignment | `-0.5 * psi^2` | |
-| Steering effort | `-0.1 * delta_f^2` | MPC: `w_delta*delta_f^2` |
-| Acceleration rate | `-0.3 * (da / a_range)^2` | MPC: `w_acc_rate*(da)^2` |
-| Steering rate | `-1.0 * (dd / d_limit)^2` | MPC: `w_steer_rate*(dd)^2` |
-| Obstacle penalty | `-100 / dist^2` | MPC: `w_obs/dist^2` |
-| Lateral velocity | `-0.5 * (y_dot / v_max)^2` | Damps overshoot |
-| Settling bonus | `+0.5` if stable at lane center | `|y-2|<0.2`, `|psi|<0.05`, `|delta_f|<0.05` |
-| Collision | `-100` | Terminal |
-| Out of road | `-100` | Terminal |
-| State violation | `-50` | Terminal |
-| Reached goal `x >= 170 m` | `+200` | Terminal |
+| Component | Formula |
+| --------- | ------- |
+| Forward progress | `+1.0 * dx / (v_max * dt)` |
+| Velocity tracking | `-1.0 * (v - v_max)^2` |
+| Lane centering | `-lat_weight * (y - 2)^2` |
+| Heading alignment | `-0.5 * psi^2` |
+| Steering effort | `-0.1 * delta_f^2` |
+| Acceleration rate | `-0.3 * (da / a_range)^2` |
+| Steering rate | `-1.0 * (dd / d_limit)^2` |
+| Obstacle penalty | `-100 / dist^2` |
+| Lateral velocity | `-0.5 * (y_dot / v_max)^2` |
+| Settling bonus | `+0.5` if `|y-2|<0.2`, `|psi|<0.05`, `|delta_f|<0.05` |
+| Collision | `-100` |
+| Out of road | `-100` |
+| State violation | `-50` |
+| Reached goal `x >= 170 m` | `+200` |
 
 **Lane weight zones**: normal `lat_weight=1.0`; near obstacle (dist < obs_r_eff + 5 m) `lat_weight=0.05`.
 
