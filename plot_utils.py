@@ -70,37 +70,26 @@ def plot_states_and_inputs(states, inputs, dt, save_path=None, show=True):
     t_x = np.arange(states.shape[0]) * dt
     t_u = np.arange(inputs.shape[0]) * dt
 
-    fig, axes = plt.subplots(3, 2, figsize=(12, 10))
+    channels = [
+        (t_x, states[:, 0], "x position [m]",       "x position [m]",      False),
+        (t_x, states[:, 1], "y position [m]",        "Position y [m]",      False),
+        (t_x, states[:, 2], "Heading ψ [rad]",        "Heading ψ [rad]",     False),
+        (t_x, states[:, 3] * 3.6, "Velocity [km/h]", "Velocity [km/h]",     False),
+        (t_u, inputs[:, 0], "Acceleration a [m/s²]",  "Acceleration [m/s²]", True),
+        (t_u, inputs[:, 1], "Steering angle δ_f [rad]", "Steering angle [rad]", True),
+    ]
 
-    # x-position
-    axes[0, 0].plot(t_x, states[:, 0])
-    axes[0, 0].set_title("x [m]")
-    axes[0, 0].grid(True)
+    fig, axes = plt.subplots(len(channels), 1, figsize=(10, 2.5 * len(channels)), sharex=False)
 
-    # y-position
-    axes[0, 1].plot(t_x, states[:, 1])
-    axes[0, 1].set_title("y [m]")
-    axes[0, 1].grid(True)
-
-    # heading
-    axes[1, 0].plot(t_x, states[:, 2])
-    axes[1, 0].set_title("psi [rad]")
-    axes[1, 0].grid(True)
-
-    # speed
-    axes[1, 1].plot(t_x, states[:, 3])
-    axes[1, 1].set_title("v [m/s]")
-    axes[1, 1].grid(True)
-
-    # acceleration input
-    axes[2, 0].step(t_u, inputs[:, 0], where="post")
-    axes[2, 0].set_title("a [m/s²]")
-    axes[2, 0].grid(True)
-
-    # steering input
-    axes[2, 1].step(t_u, inputs[:, 1], where="post")
-    axes[2, 1].set_title("delta_f [rad]")
-    axes[2, 1].grid(True)
+    for ax, (t, data, legend_label, ylabel, use_step) in zip(axes, channels):
+        if use_step:
+            ax.step(t, data, where="post", label=legend_label)
+        else:
+            ax.plot(t, data, label=legend_label)
+        ax.set_ylabel(ylabel)
+        ax.set_xlabel("Time [s]")
+        ax.legend(loc="upper right")
+        ax.grid(True)
 
     plt.tight_layout()
 
